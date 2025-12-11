@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Post
+from .models import Post,Follow
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
@@ -43,3 +43,16 @@ class PostAdmin(admin.ModelAdmin):
         """Show likes count"""
         return obj.likes_count
     likes_count.short_description = 'Likes'
+
+@admin.register(Follow)
+class FollowAdmin(admin.ModelAdmin):
+    """Admin interface for Follow relationships"""
+    
+    list_display = ('id', 'follower', 'following', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('follower__username', 'following__username')
+    readonly_fields = ('created_at',)
+    
+    def get_queryset(self, request):
+        """Optimize database queries"""
+        return super().get_queryset(request).select_related('follower', 'following')

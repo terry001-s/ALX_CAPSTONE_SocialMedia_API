@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
+from api.serializers import UserDetailSerializer
 
 User = get_user_model()  # Gets our custom User model
 
@@ -107,23 +108,24 @@ class LoginSerializer(serializers.Serializer):
         return data
 
 
-class UserProfileSerializer(serializers.ModelSerializer):
-    """Serializer for user profile (read-only for others)"""
+class UserProfileSerializer(UserDetailSerializer):
+    """Serializer for user profile (with edit capabilities)"""
     
-    followers_count = serializers.IntegerField(read_only=True)
-    following_count = serializers.IntegerField(read_only=True)
+    class Meta(UserDetailSerializer.Meta):
+        fields = UserDetailSerializer.Meta.fields
+        read_only_fields = ['id', 'date_joined', 'followers_count', 
+                          'following_count', 'posts_count', 'is_following', 'follows_you']
     
-    class Meta:
-        model = User
-        fields = [
-            'id',
-            'username',
-            'email',
-            'bio',
-            'profile_picture',
-            'followers_count',
-            'following_count',
-            'date_joined',
-            'last_login',
-        ]
-        read_only_fields = ['id', 'date_joined', 'last_login', 'followers_count', 'following_count']    
+    def update(self, instance, validated_data):
+        """Update user profile"""
+        # Remove read-only fields if they somehow get in
+        for field in ['followers_count', 'following_count', 'posts_count', 
+                     'is_following', 'follows_you']:
+            validated_data.pop(field, None)
+        
+        # Update user
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        return instance

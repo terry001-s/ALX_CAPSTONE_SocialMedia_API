@@ -1,6 +1,7 @@
 # api/models.py
 from django.db import models
-from django.conf import settings  # To reference our custom User model
+from django.conf import settings
+from django.forms import ValidationError  # To reference our custom User model
 
 class Post(models.Model):
     """
@@ -54,3 +55,49 @@ class Post(models.Model):
     def comments_count(self):
         """Count of comments on this post"""
         return self.comments.count()  # We'll add comments model later
+    
+
+class Follow(models.Model):
+    """
+    Model for following relationships.
+    When User A follows User B, we create: follower=A, following=B
+    """
+    
+    # Who is doing the following
+    follower = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='following'  # user.following.all() = people I follow
+    )
+    
+    # Who is being followed
+    following = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='followers'  # user.followers.all() = my followers
+    )
+    
+    # When the follow happened
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        """Ensure unique follow relationships"""
+        unique_together = ['follower', 'following']  # Can't follow same person twice
+        ordering = ['-created_at']  # Newest follows first
+        verbose_name = 'Follow Relationship'
+        verbose_name_plural = 'Follow Relationships'
+    
+    def __str__(self):
+        """How it appears in admin panel"""
+        return f"{self.follower.username} follows {self.following.username}"
+    
+    def clean(self):
+        """Validate before saving"""
+        # Prevent users from following themselves
+        if self.follower == self.following:
+            raise ValidationError("Users cannot follow themselves.")
+    
+    def save(self, *args, **kwargs):
+        """Custom save to run validation"""
+        self.clean()  # Run validation
+        super().save(*args, **kwargs)  # Call original save method

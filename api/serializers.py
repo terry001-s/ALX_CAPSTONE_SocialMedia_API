@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Post
+from .models import Post,Follow
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -70,3 +70,99 @@ class PostSerializer(serializers.ModelSerializer):
         instance.image = validated_data.get('image', instance.image)
         instance.save()
         return instance
+    
+
+class FollowSerializer(serializers.ModelSerializer):
+    """Serializer for Follow relationships"""
+    
+    # Show user info instead of just IDs
+    follower = UserBasicSerializer(read_only=True)
+    following = UserBasicSerializer(read_only=True)
+    
+    # For creating follows: we need these as write-only fields
+    follower_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        write_only=True,
+        source='follower'
+    )
+    following_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        write_only=True,
+        source='following'
+    )
+    
+    class Meta:
+        model = Follow
+        fields = [
+            'id',
+            'follower',      # Read-only user info
+            'following',     # Read-only user info
+            'follower_id',   # Write-only for creating
+            'following_id',  # Write-only for creating
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'follower', 'following']
+    
+    def validate(self, data):
+        """Custom validation"""
+        follower = data.get('follower') or self.context['request'].user
+        following = data.get('following')
+        
+        # Check if trying to follow self
+        if follower == following:
+            raise serializers.ValidationError("You cannot follow yourself.")
+        
+        # Check if already following
+        if Follow.objects.filter(follower=follower, following=following).exists():
+            raise serializers.ValidationError("You are already following this user.")
+        
+        return data
+    
+    def create(self, validated_data):
+        """Create follow relationship"""
+        # Set follower to current user (from request)
+        validated_data['follower'] = self.context['request'].user
+        
+        # Remove follower_id/following_id as we have actual objects
+        validated_data.pop('follower_id', None)
+        validated_data.pop('following_id', None)
+        
+        # Create follow
+        return Follow.objects.create(**validated_data)
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Enhanced user serializer with follow info"""
+    
+    followers_count = serializers.IntegerField(read_only=True)
+    following_count = serializers.IntegerField(read_only=True)
+    posts_count = serializers.IntegerField(read_only=True)
+    
+    # Check if current user follows this user
+    is_following = serializers.SerializerMethodField()
+    
+    # Check if this user follows current user
+    follows_you = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'bio', 'profile_picture',
+            'followers_count', 'following_count', 'posts_count',
+            'is_following', 'follows_you', 'date_joined'
+        ]
+        read_only_fields = fields
+    
+    def get_is_following(self, obj):
+        """Check if current user follows this user"""
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.is_followed_by(request.user)
+        return False
+    
+    def get_follows_you(self, obj):
+        """Check if this user follows current user"""
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.is_following(request.user)
+        return False    
