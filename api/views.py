@@ -2,11 +2,13 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
-from .models import Post,Follow
-from .serializers import PostSerializer, FollowSerializer, User, UserDetailSerializer
+from .models import Post, Follow, Like, Comment  
+from .serializers import PostSerializer, FollowSerializer, User, UserDetailSerializer, LikeSerializer, CommentSerializer  
 from accounts.permissions import IsOwnerOrReadOnly
 from rest_framework.decorators import action
 from rest_framework.viewsets import ViewSet
+from django.core.paginator import Paginator
+from django.db.models import Q 
 
 class PostListCreateView(generics.ListCreateAPIView):
     """
@@ -195,14 +197,326 @@ class FollowViewSet(ViewSet):
 
 
 class UserFollowDetailView(generics.RetrieveAPIView):
-    """Get detailed user info with follow status"""
-    
     serializer_class = UserDetailSerializer
     permission_classes = [permissions.IsAuthenticated]
     queryset = User.objects.all()
     lookup_field = 'username'
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context    
+    def retrieve(self, request, *args, **kwargs):
+        """Enhanced response with feed stats"""
+        response = super().retrieve(request, *args, **kwargs)
+        
+        user = self.get_object()
+        
+        # Add feed-related stats
+        response.data['feed_stats'] = {
+            'total_posts': user.posts_count,
+            'posts_in_your_feed': Post.objects.filter(
+                user=user,
+                is_deleted=False,
+                user__followers__follower=request.user
+            ).count() if request.user != user else 'N/A (your own profile)',
+            'would_see_in_feed': request.user.is_following(user)
+        }
+        
+        return response
+    
+
+class FeedView(generics.ListAPIView):
+    serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Get base queryset
+        posts = Post.objects.filter(
+            Q(user__followers__follower=user) | Q(user=user),
+            is_deleted=False
+        ).select_related('user').order_by('-created_at')
+        
+        # Filter by date if provided
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        
+        if date_from:
+            posts = posts.filter(created_at__gte=date_from)  # gte = greater than or equal
+        if date_to:
+            posts = posts.filter(created_at__lte=date_to)    # lte = less than or equal
+        
+        # Filter by user if provided
+        username = self.request.query_params.get('user', None)
+        if username:
+            posts = posts.filter(user__username=username)
+        
+        # Filter by keyword/search
+        search = self.request.query_params.get('search', None)
+        if search:
+            posts = posts.filter(content__icontains=search)  # Case-insensitive
+        
+        return posts
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Pagination
+        page_size = int(request.query_params.get('page_size', 10))
+        page_number = int(request.query_params.get('page', 1))
+        
+        paginator = Paginator(queryset, page_size)
+        
+        try:
+            page = paginator.page(page_number)
+        except:
+            return Response(
+                {"error": "Invalid page number."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = self.get_serializer(page.object_list, many=True)
+        
+        return Response({
+            'feed_info': {
+                'user': request.user.username,
+                'following_count': request.user.following_count,
+                'posts_in_feed': paginator.count,
+            },
+            'pagination': {
+                'count': paginator.count,
+                'page_size': page_size,
+                'total_pages': paginator.num_pages,
+                'current_page': page_number,
+                'next_page': page.next_page_number() if page.has_next() else None,
+                'previous_page': page.previous_page_number() if page.has_previous() else None,
+                'has_next': page.has_next(),
+                'has_previous': page.has_previous(),
+            },
+            'filters_applied': {
+                'date_from': request.query_params.get('date_from'),
+                'date_to': request.query_params.get('date_to'),
+                'user': request.query_params.get('user'),
+                'search': request.query_params.get('search'),
+            },
+            'posts': serializer.data
+        })
+    
+
+
+class GlobalFeedView(generics.ListAPIView):
+    """
+    Global feed - all public posts (from all users)
+    GET: Get paginated feed of all posts
+    """
+    
+    serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        """Get all public posts"""
+        return Post.objects.filter(
+            is_deleted=False
+        ).select_related('user').order_by('-created_at')
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Pagination
+        page_size = int(request.query_params.get('page_size', 20))
+        page_number = int(request.query_params.get('page', 1))
+        
+        paginator = Paginator(queryset, page_size)
+        
+        try:
+            page = paginator.page(page_number)
+        except:
+            return Response(
+                {"error": "Invalid page number."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = self.get_serializer(page.object_list, many=True)
+        
+        return Response({
+            'feed_type': 'global',
+            'pagination': {
+                'count': paginator.count,
+                'total_pages': paginator.num_pages,
+                'current_page': page_number,
+            },
+            'posts': serializer.data
+        })    
+    
+
+class LikeView(generics.ListCreateAPIView):
+    """
+    Handle likes on posts.
+    GET: Get all likes for a post
+    POST: Like a post
+    """
+    
+    serializer_class = LikeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        """Get likes for a specific post"""
+        post_id = self.kwargs.get('post_id')
+        return Like.objects.filter(post_id=post_id).select_related('user')
+    
+    def create(self, request, *args, **kwargs):
+        """Like a post"""
+        post_id = kwargs.get('post_id')
+        
+        try:
+            post = Post.objects.get(id=post_id, is_deleted=False)
+        except Post.DoesNotExist:
+            return Response(
+                {"error": "Post not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if already liked
+        if Like.objects.filter(user=request.user, post=post).exists():
+            return Response(
+                {"error": "You have already liked this post."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create like
+        like = Like.objects.create(user=request.user, post=post)
+        serializer = self.get_serializer(like)
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class UnlikeView(generics.DestroyAPIView):
+    """
+    Unlike a post.
+    DELETE: Remove like from post
+    """
+    
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def delete(self, request, *args, **kwargs):
+        post_id = kwargs.get('post_id')
+        
+        try:
+            post = Post.objects.get(id=post_id, is_deleted=False)
+        except Post.DoesNotExist:
+            return Response(
+                {"error": "Post not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Find and delete like
+        like = Like.objects.filter(user=request.user, post=post).first()
+        
+        if not like:
+            return Response(
+                {"error": "You have not liked this post."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        like.delete()
+        
+        return Response(
+            {"message": "Post unliked successfully."},
+            status=status.HTTP_200_OK
+        )
+
+
+class CommentListCreateView(generics.ListCreateAPIView):
+    """
+    Handle comments on posts.
+    GET: Get all comments for a post
+    POST: Add comment to post
+    """
+    
+    serializer_class = CommentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        """Get comments for a specific post"""
+        post_id = self.kwargs.get('post_id')
+        return Comment.objects.filter(
+            post_id=post_id,
+            is_deleted=False,
+            parent__isnull=True  # Only top-level comments (not replies)
+        ).select_related('user').prefetch_related('replies').order_by('created_at')
+    
+    def perform_create(self, serializer):
+        """Create comment - set post from URL"""
+        post_id = self.kwargs.get('post_id')
+        post = Post.objects.get(id=post_id)
+        serializer.save(user=self.request.user, post=post)
+
+
+class CommentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Handle single comment operations.
+    GET: Get comment details
+    PUT/PATCH: Update comment
+    DELETE: Delete comment (soft delete)
+    """
+    
+    serializer_class = CommentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    queryset = Comment.objects.filter(is_deleted=False)
+    
+    def get_object(self):
+        """Get comment, check permissions"""
+        comment = super().get_object()
+        
+        # Check if user owns the comment (for updates/deletes)
+        if self.request.user != comment.user:
+            raise PermissionDenied("You can only edit your own comments.")
+        
+        return comment
+    
+    def perform_update(self, serializer):
+        """Update comment"""
+        serializer.save()
+    
+    def perform_destroy(self, instance):
+        """Soft delete comment"""
+        instance.is_deleted = True
+        instance.save()
+        
+        return Response(
+            {"message": "Comment deleted successfully."},
+            status=status.HTTP_200_OK
+        )
+
+
+class ReplyCreateView(generics.CreateAPIView):
+    """
+    Create a reply to a comment.
+    POST: Add reply to a comment
+    """
+    
+    serializer_class = CommentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def create(self, request, *args, **kwargs):
+        """Create a reply to a comment"""
+        comment_id = kwargs.get('comment_id')
+        
+        try:
+            parent_comment = Comment.objects.get(id=comment_id, is_deleted=False)
+        except Comment.DoesNotExist:
+            return Response(
+                {"error": "Comment not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Create reply
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Set parent and post automatically
+        serializer.save(
+            user=request.user,
+            post=parent_comment.post,
+            parent=parent_comment
+        )
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)    

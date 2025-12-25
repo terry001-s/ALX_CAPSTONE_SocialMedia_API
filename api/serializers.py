@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Post,Follow
+from .models import Post,Follow, Like,Comment
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -29,21 +29,40 @@ class PostSerializer(serializers.ModelSerializer):
     )
     
     class Meta:
-        model = Post
-        fields = [
-            'id',
-            'user',          # Read-only user info
-            'user_id',       # Write-only for creating posts
-            'content',
-            'image',
-            'created_at',
-            'updated_at',
-            'likes_count',
-            'comments_count',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'user']
+      model = Post
+      fields = [
+        'id',
+        'user',
+        'user_id',
+        'content',
+        'image',
+        'created_at',
+        'updated_at',
+        'likes_count',
+        'comments_count',
+        'is_liked',          # NEW: Check if current user liked this
+        'recent_comments',   # NEW: Show recent comments
+    ]
+    read_only_fields = ['id', 'created_at', 'updated_at', 'user', 
+                       'likes_count', 'comments_count', 'is_liked', 'recent_comments']
+
+# Add these methods to PostSerializer:
+is_liked = serializers.SerializerMethodField()
+recent_comments = serializers.SerializerMethodField()
+
+def get_is_liked(self, obj):
+    """Check if current user liked this post"""
+    request = self.context.get('request')
+    if request and request.user.is_authenticated:
+        return obj.likes.filter(user=request.user).exists()
+    return False
+
+def get_recent_comments(self, obj):
+    """Get 3 most recent comments"""
+    comments = obj.comments.filter(is_deleted=False).order_by('-created_at')[:3]
+    return CommentSerializer(comments, many=True, read_only=True).data
     
-    def validate_content(self, value):
+def validate_content(self, value):
         """Validate post content"""
         if len(value.strip()) == 0:
             raise serializers.ValidationError("Content cannot be empty.")
@@ -51,7 +70,7 @@ class PostSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Content too long (max 1000 chars).")
         return value.strip()
     
-    def create(self, validated_data):
+def create(self, validated_data):
         """Create a new post"""
         # Remove user_id since we'll use request.user
         validated_data.pop('user_id', None)
@@ -63,7 +82,7 @@ class PostSerializer(serializers.ModelSerializer):
         post = Post.objects.create(user=user, **validated_data)
         return post
     
-    def update(self, instance, validated_data):
+def update(self, instance, validated_data):
         """Update an existing post"""
         # Users can only update content and image
         instance.content = validated_data.get('content', instance.content)
@@ -166,3 +185,76 @@ class UserDetailSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             return obj.is_following(request.user)
         return False    
+    
+
+class LikeSerializer(serializers.ModelSerializer):
+    """Serializer for Like model"""
+    
+    user = UserBasicSerializer(read_only=True)
+    post_id = serializers.PrimaryKeyRelatedField(
+        queryset=Post.objects.all(),
+        write_only=True,
+        source='post'
+    )
+    
+    class Meta:
+        model = Like
+        fields = ['id', 'user', 'post_id', 'created_at']
+        read_only_fields = ['id', 'user', 'created_at']
+    
+    def create(self, validated_data):
+        """Create like - set user automatically"""
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    """Serializer for Comment model"""
+    
+    user = UserBasicSerializer(read_only=True)
+    post_id = serializers.PrimaryKeyRelatedField(
+        queryset=Post.objects.all(),
+        write_only=True,
+        source='post'
+    )
+    replies_count = serializers.IntegerField(read_only=True)
+    
+    # For nested comments/replies
+    parent_id = serializers.PrimaryKeyRelatedField(
+        queryset=Comment.objects.filter(is_deleted=False),
+        write_only=True,
+        source='parent',
+        required=False,
+        allow_null=True
+    )
+    
+    # Nested replies (read-only)
+    replies = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Comment
+        fields = [
+            'id', 'user', 'post_id', 'parent_id',
+            'content', 'created_at', 'updated_at',
+            'replies_count', 'replies'
+        ]
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'replies_count', 'replies']
+    
+    def get_replies(self, obj):
+        """Get replies to this comment"""
+        replies = obj.replies.filter(is_deleted=False).order_by('created_at')
+        return CommentSerializer(replies, many=True, read_only=True).data
+    
+    def validate_content(self, value):
+        """Validate comment content"""
+        value = value.strip()
+        if len(value) == 0:
+            raise serializers.ValidationError("Comment cannot be empty.")
+        if len(value) > 500:
+            raise serializers.ValidationError("Comment too long (max 500 chars).")
+        return value
+    
+    def create(self, validated_data):
+        """Create comment - set user automatically"""
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)    
