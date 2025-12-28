@@ -257,4 +257,17 @@ class CommentSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Create comment - set user automatically"""
         validated_data['user'] = self.context['request'].user
-        return super().create(validated_data)    
+        return super().create(validated_data) 
+
+
+
+class NotificationSerializer(serializers.Serializer):
+    """Serializer for notifications"""
+    id = serializers.IntegerField()
+    type = serializers.CharField()
+    message = serializers.CharField()
+    is_read = serializers.BooleanField()
+    created_at = serializers.DateTimeField()
+    related_user = serializers.DictField(required=False)
+    related_post_id = serializers.IntegerField(required=False)
+    related_comment_id = serializers.IntegerField(required=False)

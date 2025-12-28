@@ -1,14 +1,21 @@
-from rest_framework import generics, permissions, status
+from rest_framework import generics, permissions, status, serializers,filters 
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
-from .models import Post, Follow, Like, Comment  
-from .serializers import PostSerializer, FollowSerializer, User, UserDetailSerializer, LikeSerializer, CommentSerializer  
+from rest_framework.views import APIView 
+from .models import Notification, Post, Follow, Like, Comment  
+from .serializers import PostSerializer, FollowSerializer, User, UserDetailSerializer, LikeSerializer, CommentSerializer, NotificationSerializer  
 from accounts.permissions import IsOwnerOrReadOnly
 from rest_framework.decorators import action
 from rest_framework.viewsets import ViewSet
 from django.core.paginator import Paginator
 from django.db.models import Q 
+from .filters import PostFilter, UserFilter
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters
+from django.contrib.auth import get_user_model 
+
+User = get_user_model()
 
 class PostListCreateView(generics.ListCreateAPIView):
     """
@@ -520,3 +527,87 @@ class ReplyCreateView(generics.CreateAPIView):
         )
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)    
+    
+
+class PostListCreateView(generics.ListCreateAPIView):
+    serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    # Add filter backends
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = PostFilter
+    search_fields = ['content', 'user__username']
+    ordering_fields = ['created_at', 'updated_at', 'likes_count']
+    ordering = ['-created_at']  # Default ordering
+    
+    def get_queryset(self):
+        return Post.objects.filter(is_deleted=False).select_related('user')    
+    
+
+
+class NotificationListView(generics.ListAPIView):
+    """Get user's notifications"""
+    
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = NotificationSerializer 
+    
+    def get_queryset(self):
+        return Notification.objects.filter(
+            user=self.request.user
+        ).select_related('related_user', 'related_post', 'related_comment')
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Mark all as read if requested
+        mark_read = request.query_params.get('mark_read', '').lower() == 'true'
+        if mark_read:
+            queryset.update(is_read=True)
+        
+        # Prepare response
+        notifications = []
+        for notification in queryset:
+            notifications.append({
+                'id': notification.id,
+                'type': notification.type,
+                'message': notification.message,
+                'is_read': notification.is_read,
+                'created_at': notification.created_at,
+                'related_user': {
+                    'username': notification.related_user.username if notification.related_user else None,
+                    'profile_picture': notification.related_user.profile_picture if notification.related_user else None,
+                } if notification.related_user else None,
+                'related_post_id': notification.related_post.id if notification.related_post else None,
+                'related_comment_id': notification.related_comment.id if notification.related_comment else None,
+            })
+        
+        # Count unread
+        unread_count = queryset.filter(is_read=False).count()
+        
+        return Response({
+            'unread_count': unread_count,
+            'total_count': queryset.count(),
+            'notifications': notifications[:50]  # Limit to 50
+        })
+
+
+class NotificationDetailView(APIView):
+    """Mark notification as read"""
+    
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def patch(self, request, pk):
+        try:
+            notification = Notification.objects.get(pk=pk, user=request.user)
+            notification.mark_as_read()
+            
+            return Response({
+                'message': 'Notification marked as read',
+                'notification_id': notification.id
+            })
+            
+        except Notification.DoesNotExist:
+            return Response(
+                {'error': 'Notification not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )    

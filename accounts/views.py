@@ -1,4 +1,7 @@
+from warnings import filters
 from rest_framework import generics, status, permissions
+
+from api.filters import UserFilter
 from .permissions import IsPublicEndpoint, IsOwnerOrReadOnly
 from django.contrib.auth import get_user_model
 from .serializers import UserSerializer
@@ -6,17 +9,26 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from .serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework import filters
+from django_filters.rest_framework import DjangoFilterBackend
 
 
 User = get_user_model()
 
-class UserListCreateView(generics.ListCreateAPIView):
-    """View to list all users or create new user"""
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
+class UserListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
     
-    # For now, anyone can create an account
-    # We'll add authentication later
+    # Add filters
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = UserFilter
+    search_fields = ['username', 'bio']
+    ordering_fields = ['username', 'date_joined', 'followers_count']
+    ordering = ['username']  # Default ordering
+    
+    def get_queryset(self):
+        return User.objects.all()
+
 
 class RegisterView(APIView):
     """View for user registration"""
@@ -97,19 +109,3 @@ class UserDetailView(generics.RetrieveAPIView):
         return {'request': self.request}
 
 
-class UserListView(generics.ListAPIView):
-    """View to list all users (for searching)"""
-    
-    serializer_class = UserProfileSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    queryset = User.objects.all()
-    
-    def get_queryset(self):
-        # Allow filtering by username
-        queryset = User.objects.all()
-        username = self.request.query_params.get('username', None)
-        
-        if username is not None:
-            queryset = queryset.filter(username__icontains=username)
-        
-        return queryset

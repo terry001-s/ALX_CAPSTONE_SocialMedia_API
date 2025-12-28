@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.forms import ValidationError  # To reference our custom User model
+from cloudinary.models import CloudinaryField
 
 class Post(models.Model):
     """
@@ -22,10 +23,12 @@ class Post(models.Model):
     )
     
     # Optional image URL
-    image = models.URLField(
-        blank=True,                # Not required
-        null=True,                 
-        help_text="Optional image URL"
+    image = CloudinaryField(
+        'image',
+        folder='social_media/posts/',
+        null=True,
+        blank=True,
+        help_text="Upload an image for your post"
     )
     
     # Automatic timestamps
@@ -206,3 +209,67 @@ class Comment(models.Model):
         """Soft delete - mark as deleted instead of removing"""
         self.is_deleted = True
         self.save()
+
+
+
+class Notification(models.Model):
+    """
+    System notifications for users.
+    """
+    
+    NOTIFICATION_TYPES = [
+        ('follow', 'New Follower'),
+        ('like', 'Post Like'),
+        ('comment', 'New Comment'),
+        ('mention', 'Mention in Post'),
+        ('system', 'System Message'),
+    ]
+    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notifications'
+    )
+    
+    type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)
+    message = models.CharField(max_length=255)
+    
+    # Link to related object
+    related_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sent_notifications'
+    )
+    
+    related_post = models.ForeignKey(
+        Post,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    
+    related_comment = models.ForeignKey(
+        Comment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_read', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_type_display()} for {self.user.username}"
+    
+    def mark_as_read(self):
+        """Mark notification as read"""
+        self.is_read = True
+        self.save()        

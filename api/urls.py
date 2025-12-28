@@ -4,10 +4,10 @@ from .views import (
     PostListCreateView, PostDetailView, UserPostsView,
     FollowViewSet, UserFollowDetailView,
     FeedView, GlobalFeedView,
-    LikeView, UnlikeView, CommentListCreateView, CommentDetailView, ReplyCreateView  
+    LikeView, UnlikeView, CommentListCreateView, CommentDetailView, ReplyCreateView, NotificationListView, NotificationDetailView,  
 )
-
 from django.http import JsonResponse
+from .image_views import ImageUploadView, ImageDeleteView
 
 # Create router for ViewSet
 router = DefaultRouter()
@@ -77,4 +77,12 @@ urlpatterns = [
     path('posts/<int:post_id>/comments/', CommentListCreateView.as_view(), name='post-comments'),
     path('comments/<int:pk>/', CommentDetailView.as_view(), name='comment-detail'),
     path('comments/<int:comment_id>/reply/', ReplyCreateView.as_view(), name='comment-reply'),
+
+     # Image endpoints
+    path('upload/image/', ImageUploadView.as_view(), name='upload-image'),
+    path('delete/image/<str:public_id>/', ImageDeleteView.as_view(), name='delete-image'),
+
+     # Notification endpoints
+    path('notifications/', NotificationListView.as_view(), name='notifications'),
+    path('notifications/<int:pk>/read/', NotificationDetailView.as_view(), name='notification-read'),
 ]
