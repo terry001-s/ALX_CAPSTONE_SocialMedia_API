@@ -8,6 +8,8 @@ from .views import (
 )
 from django.http import JsonResponse
 from .image_views import ImageUploadView, ImageDeleteView
+from .health import health_check
+
 
 # Create router for ViewSet
 router = DefaultRouter()
@@ -85,4 +87,6 @@ urlpatterns = [
      # Notification endpoints
     path('notifications/', NotificationListView.as_view(), name='notifications'),
     path('notifications/<int:pk>/read/', NotificationDetailView.as_view(), name='notification-read'),
+
+     path('health/', health_check, name='health-check'),
 ]
