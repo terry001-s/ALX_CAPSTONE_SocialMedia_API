@@ -185,12 +185,16 @@ SIMPLE_JWT = {
 
 
 
+import cloudinary
+import cloudinary.uploader
+from cloudinary.utils import cloudinary_url
 
-
-cloudinary.config(
-    cloud_name=config('CLOUDINARY_CLOUD_NAME', default='doqyvdg56'),
-    api_key=config('CLOUDINARY_API_KEY', default='892487376518276'),
-    api_secret=config('Plm6m-BJ1hoZEVQxpnKW9QGs1W0')
+# Configuration       
+cloudinary.config( 
+    cloud_name = "doqyvdg56", 
+    api_key = "892487376518276", 
+    api_secret = "Plm6m-BJ1hoZEVQxpnKW9QGs1W0", # Click 'View API Keys' above to copy your API secret
+    secure=True
 )
 
 # Upload an image
@@ -242,6 +246,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React frontend
     "http://127.0.0.1:3000",
 ]
+
+CORS_ALLOW_CREDENTIALS = True
 
 # Security settings for production
 if not DEBUG:
