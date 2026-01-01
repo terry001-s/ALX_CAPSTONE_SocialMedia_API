@@ -28,41 +28,43 @@ class PostSerializer(serializers.ModelSerializer):
         source='user'     # Map to 'user' field in model
     )
     
-    class Meta:
-      model = Post
-      fields = [
-        'id',
-        'user',
-        'user_id',
-        'content',
-        'image',
-        'created_at',
-        'updated_at',
-        'likes_count',
-        'comments_count',
-        'is_liked',          # NEW: Check if current user liked this
-        'recent_comments',   # NEW: Show recent comments
-    ]
-    read_only_fields = ['id', 'created_at', 'updated_at', 'user', 
-                       'likes_count', 'comments_count', 'is_liked', 'recent_comments']
-
-# Add these methods to PostSerializer:
-is_liked = serializers.SerializerMethodField()
-recent_comments = serializers.SerializerMethodField()
-
-def get_is_liked(self, obj):
-    """Check if current user liked this post"""
-    request = self.context.get('request')
-    if request and request.user.is_authenticated:
-        return obj.likes.filter(user=request.user).exists()
-    return False
-
-def get_recent_comments(self, obj):
-    """Get 3 most recent comments"""
-    comments = obj.comments.filter(is_deleted=False).order_by('-created_at')[:3]
-    return CommentSerializer(comments, many=True, read_only=True).data
+    # Add these methods to PostSerializer:
+    is_liked = serializers.SerializerMethodField()
+    recent_comments = serializers.SerializerMethodField()
     
-def validate_content(self, value):
+    class Meta:
+        model = Post
+        fields = [
+            'id',
+            'user',
+            'user_id',
+            'content',
+            'image',
+            'created_at',
+            'updated_at',
+            'likes_count',
+            'comments_count',
+            'is_liked',          # NEW: Check if current user liked this
+            'recent_comments',   # NEW: Show recent comments
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at', 'user', 
+            'likes_count', 'comments_count', 'is_liked', 'recent_comments'
+        ]
+    
+    def get_is_liked(self, obj):
+        """Check if current user liked this post"""
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.likes.filter(user=request.user).exists()
+        return False
+    
+    def get_recent_comments(self, obj):
+        """Get 3 most recent comments"""
+        comments = obj.comments.filter(is_deleted=False).order_by('-created_at')[:3]
+        return CommentSerializer(comments, many=True, read_only=True).data
+    
+    def validate_content(self, value):
         """Validate post content"""
         if len(value.strip()) == 0:
             raise serializers.ValidationError("Content cannot be empty.")
@@ -70,26 +72,26 @@ def validate_content(self, value):
             raise serializers.ValidationError("Content too long (max 1000 chars).")
         return value.strip()
     
-def create(self, validated_data):
+    def create(self, validated_data):
         """Create a new post"""
-        # Remove user_id since we'll use request.user
-        validated_data.pop('user_id', None)
-        
-        # Get user from request context
+        # Get user from request context (this is already in validated_data via user_id)
         user = self.context['request'].user
-        
+    
+        # Make sure the user from the request matches the user_id from the data
+        # Or simply override with the request user for security
+        validated_data['user'] = user
+    
         # Create post
-        post = Post.objects.create(user=user, **validated_data)
+        post = Post.objects.create(**validated_data)
         return post
     
-def update(self, instance, validated_data):
+    def update(self, instance, validated_data):
         """Update an existing post"""
         # Users can only update content and image
         instance.content = validated_data.get('content', instance.content)
         instance.image = validated_data.get('image', instance.image)
         instance.save()
         return instance
-    
 
 class FollowSerializer(serializers.ModelSerializer):
     """Serializer for Follow relationships"""
